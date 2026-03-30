@@ -1,0 +1,63 @@
+name: email-triage-env
+version: "1.0.0"
+description: >
+  An RL environment for email triage. The agent must label emails,
+  prioritize inboxes, and draft replies across 3 tasks of increasing difficulty.
+author: Aditya Arora
+license: MIT
+
+environment:
+  type: text
+  tasks:
+    - id: task1
+      difficulty: easy
+      description: Label a single email as spam/work/personal/urgent
+    - id: task2
+      difficulty: medium
+      description: Prioritize 5 emails from most to least urgent
+    - id: task3
+      difficulty: hard
+      description: Label + prioritize + draft a reply
+
+action_space:
+  type: object
+  fields:
+    label:
+      type: string
+      values: [spam, work, personal, urgent]
+      required_for: [task1, task3]
+    ranking:
+      type: array
+      items: string
+      required_for: [task2, task3]
+    reply:
+      type: string
+      required_for: [task3]
+
+observation_space:
+  type: object
+  fields:
+    task_id: string
+    task_description: string
+    email_subject: string
+    email_sender: string
+    email_body: string
+    emails: array
+    feedback: string
+    reward: float
+    done: boolean
+
+reward:
+  range: [0.0, 1.0]
+  type: dense
+  description: >
+    Task 1: 1.0 for correct label, 0.0 otherwise.
+    Task 2: Partial credit per correct position + bonus for top-2.
+    Task 3: Weighted combination of label (30%), ranking (30%), reply (40%).
+
+tags:
+  - openenv
+  - email
+  - triage
+  - nlp
+  - rl
