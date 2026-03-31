@@ -3,7 +3,7 @@ FastAPI server exposing the Email Triage environment.
 Required endpoints: /reset  /step  /state  /tasks  /grader  /baseline
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List
@@ -27,16 +27,16 @@ env = EmailTriageEnvironment()
 # ── Request/Response schemas ──────────────────────────────────────────────────
 
 class ResetRequest(BaseModel):
-    task_id: str = "task1"
+    task_id: Optional[str] = "task1"
 
 class StepRequest(BaseModel):
-    action_type: str = ""
+    action_type: Optional[str] = ""
     label: Optional[str] = None
     ranking: Optional[List[str]] = []
     reply: Optional[str] = None
 
 class GraderRequest(BaseModel):
-    task_id: str
+    task_id: Optional[str] = "task1"
     label: Optional[str] = None
     ranking: Optional[List[str]] = []
     reply: Optional[str] = None
@@ -45,23 +45,34 @@ class GraderRequest(BaseModel):
 # ── Core OpenEnv endpoints ────────────────────────────────────────────────────
 
 @app.post("/reset")
-def reset(req: ResetRequest):
-    obs = env.reset(task_id=req.task_id)
-    return obs.__dict__
+async def reset(request: Request):
+    """Accept empty body or JSON body with optional task_id."""
+    try:
+        body = await request.json()
+        task_id = body.get("task_id", "task1") if body else "task1"
+    except Exception:
+        task_id = "task1"
+    obs = env.reset(task_id=task_id)
+    return obs.model_dump()
 
 
 @app.post("/step")
-def step(req: StepRequest):
+async def step(request: Request):
+    """Accept action and return observation + reward."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     action = EmailAction(
-        action_type=req.action_type,
-        label=req.label,
-        ranking=req.ranking or [],
-        reply=req.reply,
+        action_type=body.get("action_type", ""),
+        label=body.get("label", None),
+        ranking=body.get("ranking", []),
+        reply=body.get("reply", None),
     )
     obs = env.step(action)
     state = env.state()
     return {
-        "observation": obs.__dict__,
+        "observation": obs.model_dump(),
         "reward": obs.reward,
         "done": obs.done,
         "info": {"step_count": state.step_count},
@@ -70,7 +81,7 @@ def step(req: StepRequest):
 
 @app.get("/state")
 def state():
-    return env.state().__dict__
+    return env.state().model_dump()
 
 
 # ── Required extra endpoints ──────────────────────────────────────────────────
@@ -97,19 +108,23 @@ def get_tasks():
 
 
 @app.post("/grader")
-def grader(req: GraderRequest):
+async def grader(request: Request):
     """Score an action against the correct answer for a task."""
-    if req.task_id not in TASKS:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    task_id = body.get("task_id", "task1")
+    if task_id not in TASKS:
         return JSONResponse(status_code=400, content={"error": "Invalid task_id"})
-
     action_dict = {
-        "label": req.label,
-        "ranking": req.ranking or [],
-        "reply": req.reply,
+        "label": body.get("label"),
+        "ranking": body.get("ranking", []),
+        "reply": body.get("reply"),
     }
-    score = grade(req.task_id, action_dict, TASKS[req.task_id])
+    score = grade(task_id, action_dict, TASKS[task_id])
     return {
-        "task_id": req.task_id,
+        "task_id": task_id,
         "score": score,
         "max_score": 1.0,
     }
