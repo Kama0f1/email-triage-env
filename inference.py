@@ -1,14 +1,14 @@
 """
 Inference script for Email Triage OpenEnv.
-Must be named inference.py per submission requirements.
+Uses OpenAI client pointed at HF router (free).
 
 Required environment variables:
-  API_BASE_URL  - The API endpoint for the LLM
-  MODEL_NAME    - The model identifier to use
-  HF_TOKEN      - Your Hugging Face / API key
+  HF_TOKEN      - Your Hugging Face token (free, starts with hf_)
+  API_BASE_URL  - LLM API base URL (default: https://router.huggingface.co/v1)
+  MODEL_NAME    - Model to use (default: mistralai/Mistral-7B-Instruct-v0.3)
 
 Usage:
-  API_BASE_URL=https://api.openai.com/v1 MODEL_NAME=gpt-4o-mini HF_TOKEN=sk-... python inference.py
+  HF_TOKEN=hf_xxx python inference.py
 """
 
 import os
@@ -17,18 +17,14 @@ from openai import OpenAI
 from tasks import TASKS
 from graders import grade
 
-# ── Read required env variables ───────────────────────────────────────────────
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN     = os.environ.get("HF_TOKEN", "")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME   = os.environ.get("MODEL_NAME", "mistralai/Mistral-7B-Instruct-v0.3")
 
 if not HF_TOKEN:
-    raise EnvironmentError(
-        "HF_TOKEN environment variable is not set. "
-        "Please set it to your OpenAI or HuggingFace API key."
-    )
+    raise EnvironmentError("HF_TOKEN environment variable is not set.")
 
-# ── OpenAI client using the required variables ────────────────────────────────
+# OpenAI client pointed at HF router — free, no credit card needed
 client = OpenAI(
     api_key=HF_TOKEN,
     base_url=API_BASE_URL,
@@ -36,12 +32,8 @@ client = OpenAI(
 
 
 def build_prompt(task: dict) -> str:
-    """Build a prompt describing the task for the agent."""
-    lines = [
-        f"TASK: {task['description']}",
-        "",
-    ]
-
+    """Build a prompt for the agent."""
+    lines = [f"TASK: {task['description']}", ""]
     if task["email"]:
         e = task["email"]
         lines += [
@@ -51,61 +43,61 @@ def build_prompt(task: dict) -> str:
             f"  Body: {e['body']}",
             "",
         ]
-
     if task.get("emails"):
         lines.append("EMAILS IN INBOX:")
         for e in task["emails"]:
-            lines.append(
-                f"  [{e['id']}] From: {e['sender']} | Subject: {e['subject']}"
-            )
+            lines.append(f"  [{e['id']}] From: {e['sender']} | Subject: {e['subject']}")
         lines.append("")
-
     lines += [
-        "Respond ONLY with a JSON object with these fields (use null if not needed):",
-        '{',
-        '  "label": "spam" | "work" | "personal" | "urgent" | null,',
-        '  "ranking": ["e1", "e2", ...] | null,',
-        '  "reply": "your drafted reply" | null',
-        '}',
+        "Respond ONLY with a JSON object. No explanation. No markdown. Just JSON:",
+        '{"label": "spam or work or personal or urgent or null", "ranking": ["e1","e2",...] or null, "reply": "text or null"}',
     ]
     return "\n".join(lines)
+
+
+def extract_json(text: str) -> dict:
+    """Extract JSON from model output."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
+    print(f"  [!] Could not extract JSON from: {text[:150]}")
+    return {}
 
 
 def run_task(task_id: str, task: dict) -> float:
     """Run the model on one task and return the score."""
     prompt = build_prompt(task)
-
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert email triage assistant. "
-                    "Respond only with valid JSON, no extra text."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.0,
-    )
-
-    raw = response.choices[0].message.content.strip()
-
-    # Strip markdown code fences if present
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-
     try:
-        action = json.loads(raw)
-    except json.JSONDecodeError:
-        print(f"  [!] Failed to parse JSON for {task_id}: {raw[:100]}")
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert email triage assistant. Respond only with valid JSON, no extra text.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=300,
+            temperature=0.1,
+        )
+        raw = response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"  [!] Model call failed: {e}")
         return 0.0
 
-    score = grade(task_id, action, task)
-    return score
+    action = extract_json(raw)
+    if not action:
+        return 0.0
+    return grade(task_id, action, task)
 
 
 def main():
@@ -130,8 +122,6 @@ def main():
     avg = sum(results.values()) / len(results)
     print(f"  Average: {avg:.2f}")
     print("=" * 50)
-
-    # Return results dict so /baseline endpoint can call this
     return results
 
 
