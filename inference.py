@@ -3,12 +3,9 @@ Inference script for Email Triage OpenEnv.
 Uses OpenAI client pointed at HF router (free).
 
 Required environment variables:
-  HF_TOKEN      - Your Hugging Face token (free, starts with hf_)
+  HF_TOKEN      - Your Hugging Face token
   API_BASE_URL  - LLM API base URL (default: https://router.huggingface.co/v1)
   MODEL_NAME    - Model to use (default: mistralai/Mistral-7B-Instruct-v0.3)
-
-Usage:
-  HF_TOKEN=hf_xxx python inference.py
 """
 
 import os
@@ -24,7 +21,6 @@ MODEL_NAME   = os.environ.get("MODEL_NAME", "mistralai/Mistral-7B-Instruct-v0.3"
 if not HF_TOKEN:
     raise EnvironmentError("HF_TOKEN environment variable is not set.")
 
-# OpenAI client pointed at HF router — free, no credit card needed
 client = OpenAI(
     api_key=HF_TOKEN,
     base_url=API_BASE_URL,
@@ -32,7 +28,6 @@ client = OpenAI(
 
 
 def build_prompt(task: dict) -> str:
-    """Build a prompt for the agent."""
     lines = [f"TASK: {task['description']}", ""]
     if task["email"]:
         e = task["email"]
@@ -56,7 +51,6 @@ def build_prompt(task: dict) -> str:
 
 
 def extract_json(text: str) -> dict:
-    """Extract JSON from model output."""
     text = text.strip()
     if text.startswith("```"):
         text = text.split("```")[1]
@@ -69,12 +63,10 @@ def extract_json(text: str) -> dict:
             return json.loads(text[start:end])
         except json.JSONDecodeError:
             pass
-    print(f"  [!] Could not extract JSON from: {text[:150]}")
     return {}
 
 
 def run_task(task_id: str, task: dict) -> float:
-    """Run the model on one task and return the score."""
     prompt = build_prompt(task)
     try:
         response = client.chat.completions.create(
@@ -91,7 +83,7 @@ def run_task(task_id: str, task: dict) -> float:
         )
         raw = response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"  [!] Model call failed: {e}")
+        print(f"  [!] Model call failed: {e}", flush=True)
         return 0.0
 
     action = extract_json(raw)
@@ -101,28 +93,29 @@ def run_task(task_id: str, task: dict) -> float:
 
 
 def main():
-    print("=" * 50)
-    print("Email Triage — Inference Script")
-    print(f"Model:    {MODEL_NAME}")
-    print(f"Base URL: {API_BASE_URL}")
-    print("=" * 50)
+    print(f"Model:    {MODEL_NAME}", flush=True)
+    print(f"Base URL: {API_BASE_URL}", flush=True)
 
-    results = {}
     for task_id, task in TASKS.items():
-        print(f"\nRunning {task_id} ({task['difficulty']})...")
-        score = run_task(task_id, task)
-        results[task_id] = score
-        print(f"  Score: {score:.2f} / 1.00")
+        # Print START block
+        print(f"[START] task={task_id}", flush=True)
 
-    print("\n" + "=" * 50)
-    print("RESULTS:")
-    for task_id, score in results.items():
-        difficulty = TASKS[task_id]["difficulty"]
-        print(f"  {task_id} ({difficulty}): {score:.2f}")
-    avg = sum(results.values()) / len(results)
-    print(f"  Average: {avg:.2f}")
-    print("=" * 50)
-    return results
+        score = 0.0
+        step = 0
+
+        try:
+            score = run_task(task_id, task)
+            step = 1
+            # Print STEP block
+            print(f"[STEP] step={step} reward={score:.2f}", flush=True)
+        except Exception as e:
+            print(f"[STEP] step=1 reward=0.00", flush=True)
+            print(f"Error: {e}", flush=True)
+
+        # Print END block
+        print(f"[END] task={task_id} score={score:.2f} steps={step}", flush=True)
+
+    print("Done.", flush=True)
 
 
 if __name__ == "__main__":
