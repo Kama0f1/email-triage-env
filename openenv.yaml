@@ -48,7 +48,7 @@ observation_space:
     done: boolean
 
 reward:
-  range: [0.0, 1.0]
+  range: [0.01, 0.99]
   type: dense
   description: >
     Task 1: 1.0 for correct label, 0.0 otherwise.

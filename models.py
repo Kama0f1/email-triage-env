@@ -19,7 +19,7 @@ class EmailObservation(BaseModel):
     email_body: Optional[str] = None
     emails: Optional[List[dict]] = Field(default_factory=list)
     feedback: Optional[str] = None
-    reward: float = 0.0
+    reward: float = 0.05
     done: bool = False
     valid_labels: List[str] = Field(
         default_factory=lambda: ["spam", "work", "personal", "urgent"]
@@ -31,5 +31,5 @@ class EmailState(BaseModel):
     episode_id: Optional[str] = None
     step_count: int = 0
     task_id: str = ""
-    current_score: float = 0.0
+    current_score: float = 0.05
     max_steps: int = 5
