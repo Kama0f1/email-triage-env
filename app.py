@@ -1,6 +1,6 @@
 """
 FastAPI server exposing the Email Triage environment.
-Required endpoints: /reset  /step  /state  /tasks  /grader  /baseline
+All reward/score values are strictly between 0 and 1 (never exactly 0.0 or 1.0).
 """
 
 from fastapi import FastAPI, Request
@@ -12,7 +12,7 @@ import subprocess, sys, os
 from environment import EmailTriageEnvironment
 from models import EmailAction
 from tasks import TASKS
-from graders import grade
+from graders import grade, clamp
 
 app = FastAPI(
     title="Email Triage OpenEnv",
@@ -20,26 +20,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Single shared environment instance
 env = EmailTriageEnvironment()
-
-
-# ── Request/Response schemas ──────────────────────────────────────────────────
-
-class ResetRequest(BaseModel):
-    task_id: Optional[str] = "task1"
-
-class StepRequest(BaseModel):
-    action_type: Optional[str] = ""
-    label: Optional[str] = None
-    ranking: Optional[List[str]] = []
-    reply: Optional[str] = None
-
-class GraderRequest(BaseModel):
-    task_id: Optional[str] = "task1"
-    label: Optional[str] = None
-    ranking: Optional[List[str]] = []
-    reply: Optional[str] = None
 
 
 # ── Core OpenEnv endpoints ────────────────────────────────────────────────────
@@ -53,7 +34,9 @@ async def reset(request: Request):
     except Exception:
         task_id = "task1"
     obs = env.reset(task_id=task_id)
-    return obs.model_dump()
+    result = obs.model_dump()
+    result["reward"] = clamp(result.get("reward", 0.05))
+    return result
 
 
 @app.post("/step")
@@ -71,9 +54,12 @@ async def step(request: Request):
     )
     obs = env.step(action)
     state = env.state()
+    reward = clamp(obs.reward)
+    obs_dict = obs.model_dump()
+    obs_dict["reward"] = reward
     return {
-        "observation": obs.model_dump(),
-        "reward": obs.reward,
+        "observation": obs_dict,
+        "reward": reward,
         "done": obs.done,
         "info": {"step_count": state.step_count},
     }
@@ -81,7 +67,9 @@ async def step(request: Request):
 
 @app.get("/state")
 def state():
-    return env.state().model_dump()
+    s = env.state().model_dump()
+    s["current_score"] = clamp(s.get("current_score", 0.05))
+    return s
 
 
 # ── Required extra endpoints ──────────────────────────────────────────────────
@@ -116,27 +104,22 @@ async def grader(request: Request):
         body = {}
     task_id = body.get("task_id", "task1")
     if task_id not in TASKS:
-        return JSONResponse(status_code=400, content={"error": "Invalid task_id"})
+        task_id = "task1"
     action_dict = {
         "label": body.get("label"),
         "ranking": body.get("ranking", []),
         "reply": body.get("reply"),
     }
-    score = grade(task_id, action_dict, TASKS[task_id])
+    score = clamp(grade(task_id, action_dict, TASKS[task_id]))
     return {
         "task_id": task_id,
         "score": score,
-        "max_score": 1.0,
+        "max_score": 0.99,
     }
 
 
 @app.get("/baseline")
 def baseline():
-    """
-    Trigger the inference script.
-    Runs the model against all 3 tasks and returns scores.
-    Requires: API_BASE_URL, MODEL_NAME, HF_TOKEN env variables.
-    """
     hf_token = os.environ.get("HF_TOKEN", "")
     if not hf_token:
         return JSONResponse(
@@ -148,12 +131,12 @@ def baseline():
             [sys.executable, "inference.py"],
             capture_output=True,
             text=True,
-            timeout=1200,  # 20 min max per requirements
+            timeout=1200,
             env={
                 **os.environ,
                 "HF_TOKEN": hf_token,
-                "API_BASE_URL": os.environ.get("API_BASE_URL", "https://api.openai.com/v1"),
-                "MODEL_NAME": os.environ.get("MODEL_NAME", "gpt-4o-mini"),
+                "API_BASE_URL": os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1"),
+                "MODEL_NAME": os.environ.get("MODEL_NAME", "mistralai/Mistral-7B-Instruct-v0.3"),
             },
         )
         return {"stdout": result.stdout, "stderr": result.stderr}

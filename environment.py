@@ -1,6 +1,7 @@
 """
 The Email Triage Environment.
 Implements reset(), step(), state() as required by OpenEnv spec.
+All reward values are strictly between 0 and 1 (never exactly 0.0 or 1.0).
 """
 
 import uuid
@@ -26,7 +27,7 @@ class EmailTriageEnvironment:
             episode_id=str(uuid.uuid4()),
             step_count=0,
             task_id=task_id,
-            current_score=0.0,
+            current_score=0.05,
         )
         self._last_action = {}
 
@@ -39,14 +40,13 @@ class EmailTriageEnvironment:
             email_body=task["email"]["body"] if task["email"] else None,
             emails=task.get("emails") or [],
             feedback="Episode started. Read the email(s) and take action.",
-            reward=0.0,
+            reward=0.05,  # strictly between 0 and 1
             done=False,
         )
 
     def step(self, action: EmailAction) -> EmailObservation:
         """Agent takes an action. Returns observation + reward."""
         if self._current_task is None:
-            # Auto-reset to task1 if not initialized
             return self.reset("task1")
 
         self._state.step_count += 1
@@ -63,18 +63,14 @@ class EmailTriageEnvironment:
         self._state.current_score = score
         self._last_action = action_dict
 
-        # Build feedback message
-        if score == 1.0:
-            feedback = "Perfect! Full marks."
+        if score >= 0.9:
+            feedback = "Excellent! Near perfect answer."
         elif score >= 0.7:
             feedback = f"Good job! Score: {score}. Some parts could be improved."
         elif score >= 0.4:
             feedback = f"Partial credit. Score: {score}. Review your answer."
         else:
-            feedback = f"Incorrect. Score: {score}. Try again."
-
-        # Episode ends after 1 step (each task is single-turn)
-        done = True
+            feedback = f"Needs improvement. Score: {score}. Try again."
 
         return EmailObservation(
             task_id=task_id,
@@ -85,7 +81,7 @@ class EmailTriageEnvironment:
             emails=task.get("emails") or [],
             feedback=feedback,
             reward=score,
-            done=done,
+            done=True,
         )
 
     def state(self) -> EmailState:
